@@ -1,0 +1,65 @@
+PASS illustrated background loaded
+PASS ember portrait and ten action poses loaded
+PASS tempest portrait and ten action poses loaded
+PASS warden portrait and ten action poses loaded
+PASS viper portrait and ten action poses loaded
+PASS illustrated mounts loaded
+PASS both streaming music tracks loaded
+PASS 17 sound effect sources loaded
+PASS unblocked damage preserved
+PASS guard reduces incoming damage
+PASS low attack bypasses standing block
+PASS spring launches fighter
+PASS wind lifts airborne fighter
+PASS crystal breaks once and restores health/cooldowns
+PASS destroyed crystal cannot be farmed
+PASS altar grants shield
+PASS altar cooldown prevents repeated reward
+PASS restart resets stage gimmicks
+PASS super 1 starts
+PASS super 1 cooldown
+PASS super 2 starts
+PASS super 2 cooldown
+PASS super 3 starts
+PASS super 3 cooldown
+PASS super 4 starts
+PASS super 4 cooldown
+PASS pause freezes gameplay
+PASS CPU stays on with no second phone
+PASS render EMBER idle
+PASS render EMBER high
+PASS render EMBER low
+PASS render EMBER crouch
+PASS render EMBER jump
+PASS render EMBER hit
+PASS render EMBER walk
+PASS render EMBER ride
+PASS render EMBER block
+PASS render TEMPEST idle
+PASS render TEMPEST high
+PASS render TEMPEST low
+PASS render TEMPEST crouch
+PASS render TEMPEST jump
+PASS render TEMPEST hit
+PASS render TEMPEST walk
+PASS render TEMPEST ride
+PASS render TEMPEST block
+PASS render WARDEN idle
+PASS render WARDEN high
+PASS render WARDEN low
+PASS render WARDEN crouch
+PASS render WARDEN jump
+PASS render WARDEN hit
+PASS render WARDEN walk
+PASS render WARDEN ride
+PASS render WARDEN block
+PASS render VIPER idle
+PASS render VIPER high
+PASS render VIPER low
+PASS render VIPER crouch
+PASS render VIPER jump
+PASS render VIPER hit
+PASS render VIPER walk
+PASS render VIPER ride
+PASS render VIPER block
+ALL INTEGRATION CHECKS PASSED

@@ -1,13 +1,11 @@
-# LÖVE / Shadow Fighters
-*.love
-*.log
-love-*-macos.zip
-love-runtime/
+dist/
+__pycache__/
+*.pyc
 phone_controls.txt
-phone_controls_*
 controller_qr.png
 controller_url.txt
-.DS_Store
-Thumbs.db
-.vscode/
-.idea/
+*.log
+
+/final-game.png
+/gameplay.png
+/ready-to-play.png

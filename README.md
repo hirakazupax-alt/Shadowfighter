@@ -1,3 +1,5 @@
+> Local illustrated build: see [MOONFALL_README.md](MOONFALL_README.md) for current controls, additions and verification.
+
 # Shadow Fighters
 
 A lightweight 2D arcade fighting game built with **LÖVE 11.5**.
