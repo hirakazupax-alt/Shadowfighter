@@ -9,6 +9,7 @@ import os
 import tempfile
 import threading
 import time
+import socket
 
 ROOT = Path(__file__).resolve().parent
 STATE_FILE = ROOT / "phone_controls.txt"
@@ -19,7 +20,8 @@ PLAYERS = {
 }
 ALLOWED = {
     "left", "right", "jump", "crouch", "punch", "kick", "block",
-    "mount", "special1", "special2", "special3", "confirm",
+    "high", "mid", "low", "mount", "special1", "special2", "special3",
+    "special4", "confirm",
 }
 
 
@@ -39,6 +41,36 @@ def write_state():
     finally:
         if os.path.exists(temp_name):
             os.unlink(temp_name)
+
+
+def write_controller_qr():
+    """Publish the LAN URL and its QR image for the game character-select UI."""
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.connect(("10.255.255.255", 1))
+        address = probe.getsockname()[0]
+    except OSError:
+        address = "127.0.0.1"
+    finally:
+        probe.close()
+    url = f"http://{address}:8765/"
+    (ROOT / "controller_url.txt").write_text(url + "\n", encoding="utf-8")
+    try:
+        import qrcode
+        code = qrcode.QRCode(
+            version=None,
+            error_correction=qrcode.constants.ERROR_CORRECT_M,
+            box_size=8,
+            border=4,
+        )
+        code.add_data(url)
+        code.make(fit=True)
+        code.make_image(fill_color="black", back_color="white").save(
+            ROOT / "controller_qr.png"
+        )
+    except ImportError:
+        print("Install Python package 'qrcode[pil]' to show the scan code in-game.",
+              flush=True)
 
 
 class ControllerHandler(SimpleHTTPRequestHandler):
@@ -90,6 +122,7 @@ class ControllerHandler(SimpleHTTPRequestHandler):
 
 if __name__ == "__main__":
     os.chdir(ROOT)
+    write_controller_qr()
     with LOCK:
         write_state()
     server = ThreadingHTTPServer(("0.0.0.0", 8765), ControllerHandler)

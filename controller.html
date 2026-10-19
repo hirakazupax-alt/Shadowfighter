@@ -1,10 +1,10 @@
 <!doctype html>
-<html lang="ja">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
   <meta name="theme-color" content="#12141a">
-  <title>シャドウファイターズ・コントローラー</title>
+  <title>Shadow Fighters Controller</title>
   <style>
     :root { --ink:#f5f0e6; --blue:#3b55ae; --hot:#dc4b3f; }
     * { box-sizing:border-box; -webkit-user-select:none; user-select:none; touch-action:none; -webkit-tap-highlight-color:transparent; }
@@ -39,32 +39,83 @@
     .pill { bottom:0; width:38%; height:42px; border-radius:22px; background:linear-gradient(#555b68,#23262d); border:2px solid #090a0d; box-shadow:inset 0 1px #9399a4,0 5px 8px #000b; font-size:12px; }
     .confirm {right:0;background:linear-gradient(#5b72c7,#29366f)} .pause {left:0}
     .hint { position:absolute; left:0; right:0; bottom:-17px; text-align:center; color:#838996; font-size:9px; letter-spacing:.11em; }
-    @media (max-height:700px) { .screen{height:38px}.controls{height:calc(100% - 172px);margin-top:5px}.joystick-zone{top:3%;width:43%}.button-cluster{top:0;height:55%}.system{height:34%} }
-    @media (orientation:landscape) { .shell{width:100vw;max-width:none}.controls{height:calc(100% - 150px)}.joystick-zone{width:31%;left:7%;top:-2%}.button-cluster{width:34%;right:7%;top:-5%}.system{left:39%;right:39%;height:58%;bottom:0}.screen{display:none} }
+    .rotate-message { display:none; }
+    .rotate-action { position:relative; display:block; width:auto; height:auto; margin:20px auto 0; padding:12px 20px; border:1px solid #7188e8; border-radius:10px; background:linear-gradient(#5269c2,#27366f); color:#fff; font-size:14px; font-weight:800; }
+    @media (orientation:landscape) {
+      body { justify-content:stretch; }
+      .shell { width:100vw; max-width:none; min-height:0; height:100dvh; padding:env(safe-area-inset-top) max(18px,env(safe-area-inset-right)) env(safe-area-inset-bottom) max(18px,env(safe-area-inset-left)); }
+      .shell:before { inset:5px; border-radius:24px; }
+      header { height:48px; padding:4px 14px; align-items:center; }
+      .brand { font-size:clamp(16px,3vh,22px); }
+      .brand small { display:inline; margin:0 0 0 12px; font-size:9px; }
+      #status { top:35px; right:20px; }
+      .controls { height:calc(100dvh - 58px); margin:0; min-height:0; }
+      .screen { display:none; }
+      .joystick-zone { left:3%; top:4%; width:min(43vh,34vw); }
+      .stick-base { width:86%; }
+      .stick-label { bottom:-15px; font-size:9px; }
+      .button-cluster { right:3%; top:3%; width:42%; height:86%; transform:none; }
+      .face { width:21%; font-size:clamp(14px,3.6vh,22px); }
+      .x {left:2%;top:0}.y {left:27%;top:0}.z {left:52%;top:0}.w {left:77%;top:0}
+      .a {left:2%;top:54%}.b {left:37%;top:54%}.c {left:72%;top:54%}
+      .face span { font-size:clamp(8px,1.8vh,11px); }
+      .system { left:39%; right:auto; top:7%; bottom:auto; width:17%; height:82%; }
+      .shoulder { left:0; right:auto; width:100%; height:42px; font-size:clamp(10px,2vh,13px); }
+      .mount { top:0; }.block { top:52px; }
+      .pill { left:0; right:auto; width:100%; height:38px; font-size:clamp(10px,2vh,13px); }
+      .pause { bottom:48px; }.confirm { bottom:0; }
+      .hint { bottom:-14px; font-size:8px; }
+    }
+    .face.super-used { animation:superButtonFlash .45s ease-out; }
+    @keyframes superButtonFlash {
+      0% { filter:brightness(2.3); box-shadow:0 0 0 0 #9ff5ff,0 0 32px 12px #8defff; }
+      100% { filter:brightness(1); box-shadow:inset 0 0 0 2px #9bafff88,0 7px 10px #000a; }
+    }
+    body.super-flash:after { content:""; position:fixed; z-index:8; inset:0; pointer-events:none; background:#d9f8ff66; animation:screenFlash .28s ease-out forwards; }
+    @keyframes screenFlash { from { opacity:1; } to { opacity:0; } }
+    .super-alert { position:fixed; z-index:9; top:10%; left:50%; transform:translate(-50%,-10px) scale(.85); opacity:0; pointer-events:none; padding:10px 22px; border:2px solid #91eaff; border-radius:12px; background:#08182beF; color:#effcff; font-weight:1000; letter-spacing:.12em; text-shadow:0 0 14px #7beaff; box-shadow:0 0 30px #69dfff99; transition:opacity .15s,transform .15s; }
+    .super-alert.show { opacity:1; transform:translate(-50%,0) scale(1); }
+    @media (orientation:portrait) {
+      .rotate-message { display:grid; position:fixed; z-index:5; inset:0; place-items:center; padding:28px; text-align:center; background:#090a0dee; color:#f5f0e6; font-size:clamp(20px,6vw,30px); font-weight:900; letter-spacing:.04em; }
+      .rotate-message span { display:block; margin-top:12px; color:#aeb6c7; font-size:14px; font-weight:600; }
+      .rotate-message .phone { display:block; font-size:44px; margin-bottom:14px; }
+    }
   </style>
 </head>
 <body>
 <div class="shell">
-  <header><div class="brand">SHADOW FIGHTERS<small>ARCADE CONTROL SYSTEM</small></div><select id="player"><option value="1">プレイヤー1</option><option value="2">プレイヤー2</option></select><div id="status">接続中…</div></header>
-  <div class="screen" id="display">左スティックで選択・移動</div>
+  <header><div class="brand">SHADOW FIGHTERS<small>ARCADE CONTROL SYSTEM</small></div><select id="player"><option value="1">PLAYER 1</option><option value="2">PLAYER 2</option></select><div id="status">Connecting…</div></header>
+  <div class="screen" id="display">Move with the stick</div>
   <main class="controls">
-    <section class="joystick-zone" id="joystick"><div class="stick-base"><div class="stick-knob" id="knob"></div></div><div class="stick-label">ANALOG MOVEMENT</div></section>
+    <section class="joystick-zone" id="joystick"><div class="stick-base"><div class="stick-knob" id="knob"></div></div><div class="stick-label">MOVE</div></section>
     <section class="button-cluster">
-      <button class="face special x" data-button="special1">X<span>フック</span></button><button class="face special y" data-button="special2">Y<span>突進</span></button><button class="face special z" data-button="special3">Z<span>衝撃波</span></button>
-      <button class="face a" data-button="punch">A<span>パンチ</span></button><button class="face b" data-button="kick">B<span>キック</span></button><button class="face c" data-button="jump">C<span>ジャンプ</span></button>
+      <button class="face special x" data-button="special1">X<span>WEB</span></button><button class="face special y" data-button="special2">Y<span>TELEPORT</span></button><button class="face special z" data-button="special3">Z<span>FLY</span></button><button class="face special w" data-button="special4">W<span>TIME STOP</span></button>
+      <button class="face a" data-button="high">A<span>HIGH</span></button><button class="face b" data-button="mid">B<span>MID</span></button><button class="face c" data-button="low">C<span>LOW</span></button>
     </section>
-    <section class="system"><button class="shoulder mount" data-button="mount">L　動物に乗る</button><button class="shoulder block" data-button="block">R　ガード</button><button class="pill pause" data-button="crouch">しゃがむ</button><button class="pill confirm" data-button="confirm">決定 / START</button><div class="hint">スマホは縦向きで使用してください</div></section>
+    <section class="system"><button class="shoulder mount" data-button="mount">MOUNT</button><button class="shoulder block" data-button="block">BLOCK</button><button class="pill pause" data-button="crouch">CROUCH</button><button class="pill confirm" data-button="confirm">START</button><div class="hint">HOLD PHONE SIDEWAYS</div></section>
   </main>
 </div>
+<div class="rotate-message"><div><span class="phone">↻</span>Rotate your phone sideways<span id="orientationHint">Use the controller in landscape orientation.</span><button class="rotate-action" id="landscapeButton" type="button">TRY LANDSCAPE MODE</button></div></div>
+<div class="super-alert" id="superAlert"></div>
 <script>
-  const active=new Set(),status=document.querySelector('#status'),player=document.querySelector('#player'),display=document.querySelector('#display'),zone=document.querySelector('#joystick'),knob=document.querySelector('#knob');
-  let sending=false,stickPointer=null;const queue=[];const buzz=ms=>{if(navigator.vibrate)navigator.vibrate(ms)};
+  const active=new Set(),status=document.querySelector('#status'),player=document.querySelector('#player'),display=document.querySelector('#display'),zone=document.querySelector('#joystick'),knob=document.querySelector('#knob'),superAlert=document.querySelector('#superAlert');
+  const landscapeButton=document.querySelector('#landscapeButton'),orientationHint=document.querySelector('#orientationHint');
+  landscapeButton.addEventListener('click',async()=>{
+    try{
+      if(!document.fullscreenElement)await document.documentElement.requestFullscreen();
+      if(screen.orientation?.lock)await screen.orientation.lock('landscape');
+      else orientationHint.textContent='Your browser cannot rotate automatically. Turn your phone sideways.';
+    }catch(_){orientationHint.textContent='Turn your phone sideways to use the landscape controller.'}
+  });
+  let sending=false,stickPointer=null,alertTimer;const queue=[];const buzz=ms=>{if(navigator.vibrate)navigator.vibrate(ms)};
   function send(){const state=JSON.stringify({player:player.value,buttons:[...active]});if(queue[queue.length-1]!==state)queue.push(state);drain()}
-  async function drain(){if(sending||!queue.length)return;sending=true;const state=queue.shift();try{await fetch('/input',{method:'POST',headers:{'Content-Type':'application/json'},body:state});status.textContent=`接続済み • P${JSON.parse(state).player}`}catch(_){status.textContent='再接続中…';queue.unshift(state);sending=false;setTimeout(drain,500);return}sending=false;drain()}
-  function setButton(name,on,element){const changed=on?!active.has(name):active.has(name);if(on)active.add(name);else active.delete(name);if(element)element.classList.toggle('on',on);if(changed&&on)buzz(18);if(changed)send()}
+  async function drain(){if(sending||!queue.length)return;sending=true;const state=queue.shift();try{await fetch('/input',{method:'POST',headers:{'Content-Type':'application/json'},body:state});status.textContent=`CONNECTED • P${JSON.parse(state).player}`}catch(_){status.textContent='RECONNECTING…';queue.unshift(state);sending=false;setTimeout(drain,500);return}sending=false;drain()}
+  const superNames={special1:'WEB SWING',special2:'TELEPORT',special3:'SPIDER FLIGHT',special4:'TIME STOP'};
+  function showSuper(button,name){button.classList.remove('super-used');void button.offsetWidth;button.classList.add('super-used');document.body.classList.remove('super-flash');void document.body.offsetWidth;document.body.classList.add('super-flash');superAlert.textContent=`SUPER  •  ${superNames[name]}`;superAlert.classList.add('show');clearTimeout(alertTimer);alertTimer=setTimeout(()=>{document.body.classList.remove('super-flash');superAlert.classList.remove('show')},850);if(navigator.vibrate)navigator.vibrate([65,35,90])}
+  function setButton(name,on,element){const changed=on?!active.has(name):active.has(name);if(on)active.add(name);else active.delete(name);if(element)element.classList.toggle('on',on);if(changed&&on){if(superNames[name])showSuper(element,name);else buzz(18)}if(changed)send()}
   document.querySelectorAll('button[data-button]').forEach(button=>{const name=button.dataset.button;const down=e=>{e.preventDefault();button.setPointerCapture?.(e.pointerId);setButton(name,true,button)};const up=e=>{e.preventDefault();setButton(name,false,button)};button.addEventListener('pointerdown',down);button.addEventListener('pointerup',up);button.addEventListener('pointercancel',up);button.addEventListener('lostpointercapture',up)});
-  function moveStick(e){const r=zone.getBoundingClientRect(),cx=r.left+r.width/2,cy=r.top+r.height/2;let dx=e.clientX-cx,dy=e.clientY-cy,max=r.width*.27,mag=Math.hypot(dx,dy);if(mag>max){dx=dx/mag*max;dy=dy/mag*max}knob.style.transform=`translate(calc(-50% + ${dx}px),calc(-50% + ${dy}px))`;const dead=max*.28;setButton('left',dx<-dead);setButton('right',dx>dead);setButton('jump',dy<-dead);setButton('crouch',dy>dead);const labels=[];if(dx<-dead)labels.push('左');if(dx>dead)labels.push('右');if(dy<-dead)labels.push('ジャンプ');if(dy>dead)labels.push('しゃがむ');display.textContent=labels.length?labels.join(' + '):'左スティックで選択・移動'}
-  function releaseStick(){stickPointer=null;knob.style.transform='translate(-50%,-50%)';['left','right','jump','crouch'].forEach(name=>setButton(name,false));display.textContent='左スティックで選択・移動';send()}
+  function moveStick(e){const r=zone.getBoundingClientRect(),cx=r.left+r.width/2,cy=r.top+r.height/2;let dx=e.clientX-cx,dy=e.clientY-cy,max=r.width*.27,mag=Math.hypot(dx,dy);if(mag>max){dx=dx/mag*max;dy=dy/mag*max}knob.style.transform=`translate(calc(-50% + ${dx}px),calc(-50% + ${dy}px))`;const dead=max*.28;setButton('left',dx<-dead);setButton('right',dx>dead);setButton('jump',dy<-dead);setButton('crouch',dy>dead);const labels=[];if(dx<-dead)labels.push('LEFT');if(dx>dead)labels.push('RIGHT');if(dy<-dead)labels.push('JUMP');if(dy>dead)labels.push('CROUCH');display.textContent=labels.length?labels.join(' + '):'Move with the stick'}
+  function releaseStick(){stickPointer=null;knob.style.transform='translate(-50%,-50%)';['left','right','jump','crouch'].forEach(name=>setButton(name,false));display.textContent='Move with the stick';send()}
   zone.addEventListener('pointerdown',e=>{e.preventDefault();stickPointer=e.pointerId;zone.setPointerCapture?.(e.pointerId);buzz(12);moveStick(e)});zone.addEventListener('pointermove',e=>{if(e.pointerId===stickPointer)moveStick(e)});zone.addEventListener('pointerup',e=>{if(e.pointerId===stickPointer)releaseStick()});zone.addEventListener('pointercancel',releaseStick);zone.addEventListener('lostpointercapture',releaseStick);
   player.addEventListener('change',()=>{active.clear();releaseStick();send()});setInterval(send,100);send();
 </script>

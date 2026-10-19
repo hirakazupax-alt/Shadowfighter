@@ -1,3 +1,5 @@
+> Local illustrated build: see [MOONFALL_README.md](MOONFALL_README.md) for current controls, additions and verification.
+
 # Shadow Fighters
 
 A lightweight 2D arcade fighting game built with **LÖVE 11.5**.
@@ -15,7 +17,7 @@ Shadow Fighters currently has:
 * Long side-scrolling campaign stage with a flag goal
 * Multi-layer parallax scenery and level progress display
 * Smash-style dynamic camera zoom that keeps both fighters visible
-* Three cooldown-based special moves for each fighter
+* Four cooldown-based super abilities for every fighter
 * Working question blocks that release temporary Super Mushrooms
 * Solid and moving platforms, pits, spikes, and alternate routes
 * Six contested power-ups with distinct tactical effects
@@ -24,8 +26,8 @@ Shadow Fighters currently has:
 * Player vs Player
 * CPU opponent
 * Easy / Normal / Hard CPU difficulty
-* Punch and kick attacks
-* Blocking
+* High, mid, and low attacks with matching crouch and block behavior
+* Posture-aware blocking
 * Jumping
 * Crouching
 * Health and damage
@@ -134,13 +136,15 @@ return to character select.
 | D   | Move right    |
 | W   | Jump          |
 | S   | Crouch        |
-| J   | Punch         |
-| K   | Kick          |
+| J   | High attack   |
+| K   | Mid attack    |
+| H   | Low attack    |
 | L   | Block         |
 | E   | Mount/dismount nearby animal |
-| U   | Chain Hook special |
-| I   | Shadow Rush special |
-| O   | Soul Burst special |
+| U   | Spider Web Sling |
+| I   | Teleport          |
+| O   | Spider Flight     |
+| P   | Time Stop         |
 | R   | Restart match |
 
 ## Player 2
@@ -153,18 +157,28 @@ When CPU mode is disabled:
 | →   | Move right |
 | ↑   | Jump       |
 | ↓   | Crouch     |
-| N   | Punch      |
-| M   | Kick       |
+| N   | High attack |
+| M   | Mid attack  |
+| ,   | Low attack  |
 | B   | Block      |
 | /   | Mount/dismount nearby animal |
-| 1   | Chain Hook special |
-| 2   | Shadow Rush special |
-| 3   | Soul Burst special |
+| 1   | Spider Web Sling |
+| 2   | Teleport          |
+| 3   | Spider Flight     |
+| 4   | Time Stop         |
 
-**Chain Hook** fires a hooked chain up to long range and pulls an opponent into
-striking distance. **Shadow Rush** is a fast damaging dash. **Soul Burst**
-creates a powerful close-range shockwave. Each move has its own cooldown shown
-under the health bars.
+High attacks are quick strikes that miss a grounded crouching opponent. Mid
+attacks hit either stance. Low attacks strike the legs, pass through a standing
+guard, and can be stopped by blocking while crouched. Hold **S + L** to crouch
+block as Player 1; hold **↓ + B** as Player 2.
+
+Spider Web Sling throws a web overhead and swings forward, damaging an opponent
+it catches. Teleport shifts you behind a nearby opponent or forward when they
+are far away, with a brief dodge window. Spider Flight lets you hover for three
+seconds; use jump and crouch to rise and descend. Time Stop freezes the opponent
+for three seconds. Each super has its own cooldown shown under the health bars.
+The phone controller flashes, vibrates, and names the super when its button is
+pressed.
 
 The CPU will automatically mount an available nearby animal. The horse is
 faster, while the boar gives a smaller speed and jump boost.

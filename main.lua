@@ -1,3 +1,5 @@
+local FX = require("arena_fx")
+FX.load()
 local arenaWidth = 960
 local levelWidth = 3600
 local flagX = levelWidth - 150
@@ -12,6 +14,7 @@ local blockDamageScale = 0.20
 local blockKnockbackScale = 0.25
 local roundDuration = 120
 local roundEndDelay = 2
+local winnerScreenDuration = 3
 local roundsToWin = 2
 local hitStopDuration = 0.06
 local hitFlashDuration = 0.12
@@ -21,15 +24,24 @@ local fighter2StartX = 700
 local cameraX = 0
 local cameraCenterX = arenaWidth / 2
 local cameraZoom = 1
+local screenShakeTimer = 0
+local screenShakeStrength = 0
+local screenFlashTimer = 0
+local superBannerTimer = 0
+local superBannerText = ""
 local mountDistance = 72
 local riderOffset = 34
-local cpuEnabled = false
+local cpuEnabled = true
 local cpuDifficulty = "normal"
 local uiFont = love.graphics.newFont(12)
 local timerFont = love.graphics.newFont(28)
 local resultFont = love.graphics.newFont(38)
 local titleFont = love.graphics.newFont(46)
 local characterFont = love.graphics.newFont(24)
+local controllerQrImage
+local controllerQrCheckTimer = 0
+local controllerQrFileData
+local controllerQrUrl = "Start controller_server.py"
 
 local characters = {
     {
@@ -63,17 +75,31 @@ local characters = {
 }
 
 local attacks = {
-    punch = { startup = 0.07, active = 0.10, recovery = 0.29, range = 58, height = 26,
-        damage = 24, knockback = 22, yOffset = 48 },
-    kick = { startup = 0.11, active = 0.14, recovery = 0.36, range = 82, height = 24,
-        damage = 34, knockback = 30, yOffset = 30 },
+    high = { startup = 0.05, active = 0.09, recovery = 0.24, range = 64,
+        height = 16, damage = 19, knockback = 16, yOffset = 60,
+        lane = "HIGH", limb = "arm" },
+    mid = { startup = 0.10, active = 0.13, recovery = 0.31, range = 76,
+        height = 22, damage = 27, knockback = 25, yOffset = 39,
+        lane = "MID", limb = "arm" },
+    low = { startup = 0.15, active = 0.16, recovery = 0.40, range = 86,
+        height = 18, damage = 31, knockback = 29, yOffset = 9,
+        lane = "LOW", limb = "leg" },
 }
 
 local specialMoves = {
-    { name = "CHAIN HOOK", cooldown = 5.0, duration = 0.62 },
-    { name = "SHADOW RUSH", cooldown = 4.0, duration = 0.34 },
-    { name = "SOUL BURST", cooldown = 6.0, duration = 0.48 },
+    { name = "WEB SWING", cooldown = 7.0, duration = 0.72 },
+    { name = "TELEPORT", cooldown = 8.0, duration = 0.32 },
+    { name = "SPIDER FLIGHT", cooldown = 12.0, duration = 0.32, flight = 3.0 },
+    { name = "TIME STOP", cooldown = 20.0, duration = 0.42, freeze = 3.0 },
 }
+
+local function triggerSuperFeedback(index)
+    screenShakeTimer = 0.38
+    screenShakeStrength = index == 4 and 13 or 8
+    screenFlashTimer = 0.24
+    superBannerTimer = 0.9
+    superBannerText = specialMoves[index].name .. "!"
+end
 
 local cpuProfiles = {
     easy = {
@@ -145,6 +171,7 @@ end
 local loseLife
 local spawnFireball
 local fireballs = {}
+local fighter1, fighter2
 
 local Fighter = {}
 Fighter.__index = Fighter
@@ -176,7 +203,9 @@ function Fighter.new(x, color, controls)
         ko = false,
         mount = nil,
         special = nil,
-        specialCooldowns = { 0, 0, 0 },
+        specialCooldowns = { 0, 0, 0, 0 },
+        flightTimer = 0,
+        timeStopTimer = 0,
         mushroomTimer = 0,
         shieldHealth = 0,
         fireTimer = 0,
@@ -211,7 +240,9 @@ function Fighter:reset()
     self.comboTimer = 0
     self.ko = false
     self.special = nil
-    self.specialCooldowns = { 0, 0, 0 }
+    self.specialCooldowns = { 0, 0, 0, 0 }
+    self.flightTimer = 0
+    self.timeStopTimer = 0
     self.mushroomTimer = 0
     self.shieldHealth = 0
     self.fireTimer = 0
@@ -224,16 +255,17 @@ function Fighter:reset()
     self.comebackBoost = 1
 end
 
-function Fighter:takeDamage(amount, knockback, attacker)
+function Fighter:takeDamage(amount, knockback, attacker, bypassBlock)
     if self.ko or self.invulnerableTimer > 0 then
         return
     end
 
-    local damageScale = self.blocking and blockDamageScale or 1
+    local blocking = self.blocking and not bypassBlock
+    local damageScale = blocking and blockDamageScale or 1
     if self.mushroomTimer > 0 then
         damageScale = damageScale * 0.80
     end
-    local knockbackScale = self.blocking and blockKnockbackScale or 1
+    local knockbackScale = blocking and blockKnockbackScale or 1
     local damage = math.max(1, math.floor(amount * damageScale + 0.5))
     if self.shieldHealth > 0 then
         local absorbed = math.min(self.shieldHealth, damage)
@@ -244,8 +276,10 @@ function Fighter:takeDamage(amount, knockback, attacker)
             return
         end
     end
+    FX.hit(self,damage,blocking)
     self.health = math.max(0, self.health - damage)
     if self.health == 0 then
+        FX.sound("ko")
         self.ko = true
         self.attack = nil
         self.special = nil
@@ -282,6 +316,7 @@ function Fighter:jump()
         if self.mount and self.mount.bonded then
             mountJump = mountJump + 0.08
         end
+        FX.sound("jump")
         self.velocityY = -jumpSpeed * self.jumpScale * mountJump
         self.grounded = false
     end
@@ -293,6 +328,7 @@ function Fighter:startAttack(kind)
         return
     end
 
+    FX.sound("whoosh")
     local settings = attacks[kind]
     local sizeScale = self.mushroomTimer > 0 and 1.35 or 1
     self.attack = {
@@ -303,7 +339,7 @@ function Fighter:startAttack(kind)
         hitbox = { x = 0, y = 0, width = settings.range * sizeScale,
             height = settings.height * sizeScale },
     }
-    if kind == "punch" and self.fireTimer > 0 and self.fireballCooldown <= 0
+    if kind == "high" and self.fireTimer > 0 and self.fireballCooldown <= 0
         and spawnFireball then
         spawnFireball(self)
         self.fireballCooldown = 0.65
@@ -316,23 +352,44 @@ function Fighter:startSpecial(index)
         return false
     end
     local move = specialMoves[index]
+    if not move then return false end
     self.special = {
         index = index,
         name = move.name,
         timer = move.duration,
         duration = move.duration,
         hit = false,
-        targetX = self.x + self.facing * (index == 1 and 390 or 110),
+        startX = self.x,
+        startY = self.y,
+        startGrounded = self.grounded,
+        startPlatform = self.platform,
+        anchorX = self.x + self.facing * 270,
+        targetX = self.x + self.facing * 270,
     }
     self.specialCooldowns[index] = move.cooldown
+    if move.flight then
+        self.flightTimer = move.flight
+        self.grounded = false
+        self.velocityY = 0
+    end
+    if move.freeze then
+        local opponent = self == fighter1 and fighter2 or fighter1
+        opponent.timeStopTimer = move.freeze
+        opponent.stunTimer = math.max(opponent.stunTimer, move.freeze)
+        opponent.attack = nil
+        opponent.special = nil
+        opponent.blocking = false
+    end
     self.blocking = false
+    FX.special(self,index)
+    triggerSuperFeedback(index)
     return true
 end
 
 function Fighter:update(dt)
     self.hitFlash = math.max(0, self.hitFlash - dt)
     self.comboTimer = math.max(0, self.comboTimer - dt)
-    for i = 1, 3 do
+    for i = 1, #specialMoves do
         self.specialCooldowns[i] = math.max(0, self.specialCooldowns[i] - dt)
     end
     self.mushroomTimer = math.max(0, self.mushroomTimer - dt)
@@ -341,12 +398,19 @@ function Fighter:update(dt)
     self.bootsTimer = math.max(0, self.bootsTimer - dt)
     self.bondCharmTimer = math.max(0, self.bondCharmTimer - dt)
     self.stunTimer = math.max(0, self.stunTimer - dt)
+    self.flightTimer = math.max(0, self.flightTimer - dt)
+    self.timeStopTimer = math.max(0, self.timeStopTimer - dt)
     self.invulnerableTimer = math.max(0, self.invulnerableTimer - dt)
     if self.comboTimer == 0 then
         self.combo = 0
     end
     if self.ko then
         self.state = "ko"
+        return
+    end
+    if self.timeStopTimer > 0 then
+        self.blocking = false
+        self.state = "time_stopped"
         return
     end
     if self.stunTimer > 0 then
@@ -396,7 +460,18 @@ function Fighter:update(dt)
         self.mount.facing = self.facing
     end
 
-    if not self.grounded then
+    if self.special and self.special.index == 1 then
+        self.grounded = false
+        self.velocityY = 0
+    elseif self.flightTimer > 0 then
+        self.grounded = false
+        self.platform = nil
+        self.velocityY = 0
+        local vertical = (self:isDown("crouch") and 1 or 0)
+            - (self:isDown("jump") and 1 or 0)
+        self.y = math.max(floorY - 230,
+            math.min(floorY - 90, self.y + vertical * 190 * dt))
+    elseif not self.grounded then
         local previousY = self.y
         self.velocityY = self.velocityY + gravity * dt
         self.y = self.y + self.velocityY * dt
@@ -434,12 +509,14 @@ end
 function Fighter:updateState()
     if self.ko then
         self.state = "ko"
+    elseif self.timeStopTimer > 0 then
+        self.state = "time_stopped"
     elseif self.stunTimer > 0 then
         self.state = "stunned"
     elseif self.special then
         self.state = string.lower(self.special.name):gsub(" ", "_")
     elseif self.attack then
-        self.state = self.attack.kind == "punch" and "punching" or "kicking"
+        self.state = attacks[self.attack.kind].lane:lower() .. "_attack"
     elseif self.blocking then
         self.state = "blocking"
     elseif not self.grounded then
@@ -453,15 +530,15 @@ function Fighter:updateState()
     end
 end
 
-local fighter1 = Fighter.new(fighter1StartX, { 0.42, 0.72, 0.88 }, {
+fighter1 = Fighter.new(fighter1StartX, { 0.42, 0.72, 0.88 }, {
     left = "a", right = "d", jump = "w", crouch = "s",
-    punch = "j", kick = "k", block = "l",
-    special1 = "u", special2 = "i", special3 = "o",
+    high = "j", mid = "k", low = "h", block = "l",
+    special1 = "u", special2 = "i", special3 = "o", special4 = "p",
 })
-local fighter2 = Fighter.new(fighter2StartX, { 0.88, 0.38, 0.25 }, {
+fighter2 = Fighter.new(fighter2StartX, { 0.88, 0.38, 0.25 }, {
     left = "left", right = "right", jump = "up", crouch = "down",
-    punch = "n", kick = "m", block = "b",
-    special1 = "1", special2 = "2", special3 = "3",
+    high = "n", mid = "m", low = ",", block = "b",
+    special1 = "1", special2 = "2", special3 = "3", special4 = "4",
 })
 
 local fighters = { fighter1, fighter2 }
@@ -563,6 +640,7 @@ local function updatePowerUps(dt)
                 if not fighter.ko and math.abs(fighter.x - mushroom.x) < 34
                     and math.abs(fighter.y - mushroom.y) < 70 then
                     mushroom.collected = true
+                    FX.sound("pickup")
                     if mushroom.kind == "MUSHROOM" then
                         fighter.mushroomTimer = 14
                         fighter.health = math.min(fighter.maxHealth, fighter.health + 25)
@@ -781,6 +859,8 @@ loseLife = function(fighter, reason)
         return
     end
     local playerNumber = fighter == fighter1 and 1 or 2
+    FX.sound("ko")
+    FX.burst(fighter.x,fighter.y-40,fighter.color,35,190)
     game.lives[playerNumber] = math.max(0, game.lives[playerNumber] - 1)
     if fighter.mount then
         fighter.mount.rider = nil
@@ -791,6 +871,7 @@ loseLife = function(fighter, reason)
         local winner = playerNumber == 1 and 2 or 1
         game.state = "match_over"
         game.result = "PLAYER " .. winner .. " WINS — NO LIVES LEFT"
+        game.transitionTimer = winnerScreenDuration
         return
     end
     fighter.x = checkpointFor(fighter.x)
@@ -857,6 +938,7 @@ local function resetRound()
     game.result = ""
     game.transitionTimer = 0
     game.state = "fighting"
+    FX.reset(); FX.sound("confirm")
     cameraX = 0
     cameraCenterX = arenaWidth / 2
     cameraZoom = 1
@@ -893,8 +975,42 @@ local previousPhoneEvents = { {}, {} }
 local phoneEventsInitialized = false
 local phoneConnected = { false, false }
 
+local function readControllerFile(name)
+    local data=love.filesystem.read(name)
+    if data then return data end
+    local f=io.open(love.filesystem.getSourceBaseDirectory().."/"..name,"rb")
+    if f then local value=f:read("*a");f:close();return value end
+end
+
+local function refreshControllerQr(force)
+    controllerQrCheckTimer = 0.5
+    local url = readControllerFile("controller_url.txt")
+    if url then
+        controllerQrUrl = url:gsub("%s+$", "")
+    end
+    local info = love.filesystem.getInfo("controller_qr.png")
+    if not info then
+        return
+    end
+
+    local data = love.filesystem.read("controller_qr.png")
+    if not data or (not force and data == controllerQrFileData) then
+        return
+    end
+    local ok, fileData = pcall(love.filesystem.newFileData, data, "controller_qr.png")
+    if not ok then
+        return
+    end
+    local imageOk, image = pcall(love.graphics.newImage, fileData)
+    if imageOk then
+        image:setFilter("nearest", "nearest")
+        controllerQrImage = image
+        controllerQrFileData = data
+    end
+end
+
 local function readPhoneState()
-    local contents = love.filesystem.read("phone_controls.txt")
+    local contents = readControllerFile("phone_controls.txt")
     local values = {}
     if contents then
         for key, value in contents:gmatch("([%w_]+)=([^\n]+)") do
@@ -915,7 +1031,7 @@ local function handlePhonePress(playerNumber, action)
             selectedCharacter[playerNumber] = selectedCharacter[playerNumber]
                 % #characters + 1
             selectionReady[playerNumber] = false
-        elseif action == "confirm" or action == "punch" then
+        elseif action == "confirm" or action == "high" or action == "punch" then
             selectionReady[playerNumber] = true
             if playerNumber == 1 and cpuEnabled then
                 repeat
@@ -934,10 +1050,12 @@ local function handlePhonePress(playerNumber, action)
     end
     if action == "jump" then
         fighter:jump()
-    elseif action == "punch" then
-        fighter:startAttack("punch")
-    elseif action == "kick" then
-        fighter:startAttack("kick")
+    elseif action == "high" or action == "punch" then
+        fighter:startAttack("high")
+    elseif action == "mid" or action == "kick" then
+        fighter:startAttack("mid")
+    elseif action == "low" then
+        fighter:startAttack("low")
     elseif action == "mount" then
         toggleMount(fighter)
     elseif action == "special1" then
@@ -946,6 +1064,8 @@ local function handlePhonePress(playerNumber, action)
         fighter:startSpecial(2)
     elseif action == "special3" then
         fighter:startSpecial(3)
+    elseif action == "special4" then
+        fighter:startSpecial(4)
     end
 end
 
@@ -957,12 +1077,13 @@ local function updatePhoneControls(dt)
     phonePollTimer = 0.04
     local values = readPhoneState()
     local currentTime = os.time()
-    -- Phone-controller sessions currently run as two-player matches.
-    cpuEnabled = false
+    -- Switch to local PvP only when a second phone is actively connected.
+    local p2seen=tonumber(values["p2_seen"] or "0") or 0
+    if currentTime-p2seen<=2 then cpuEnabled=false end
 
     local actions = {
-        "left", "right", "jump", "crouch", "punch", "kick", "block",
-        "mount", "special1", "special2", "special3", "confirm",
+        "left", "right", "jump", "crouch", "high", "mid", "low", "punch", "kick", "block",
+        "mount", "special1", "special2", "special3", "special4", "confirm",
     }
     for playerNumber = 1, 2 do
         local seen = tonumber(values["p" .. playerNumber .. "_seen"] or "0") or 0
@@ -1019,6 +1140,7 @@ local function finishRound(winner)
         fighter2.combo = 0
         fighter2.comboTimer = 0
         game.state = "match_over"
+        game.transitionTimer = winnerScreenDuration
     else
         game.state = "round_over"
         game.transitionTimer = roundEndDelay
@@ -1074,13 +1196,16 @@ local function updateAttack(attacker, defender, dt)
                 width = fighterWidth,
                 height = defenderHeight,
             }
-            if overlaps(hitbox, defenderBox) then
+            local duckedHigh = settings.lane == "HIGH"
+                and defender.crouching and defender.grounded
+            if overlaps(hitbox, defenderBox) and not duckedHigh then
                 attack.hitOpponent = true
                 local bondPower = attacker.mount and attacker.mount.bonded and 1.05 or 1
                 local mushroomPower = attacker.mushroomTimer > 0 and 1.35 or 1
                 defender:takeDamage(settings.damage * attacker.power
                     * bondPower * mushroomPower * attacker.comebackBoost,
-                    settings.knockback, attacker)
+                    settings.knockback, attacker,
+                    settings.lane == "LOW" and not defender.crouching)
                 attacker.combo = attacker.combo + 1
                 attacker.comboTimer = comboTimeout
                 defender.combo = 0
@@ -1105,47 +1230,47 @@ local function updateSpecial(attacker, defender, dt)
     local mushroomPower = attacker.mushroomTimer > 0 and 1.35 or 1
 
     if special.index == 1 then
-        local reach = math.min(390, progress * 720)
-        special.targetX = attacker.x + attacker.facing * reach
-        if not special.hit and progress >= 0.32 and progress <= 0.82
-            and direction == attacker.facing and distance <= 400 then
+        local eased = progress * progress * (3 - 2 * progress)
+        special.targetX = special.startX + attacker.facing * 270 * eased
+        attacker.x = math.max(fighterWidth / 2,
+            math.min(levelWidth - fighterWidth / 2, special.targetX))
+        attacker.y = special.startY - math.sin(progress * math.pi) * 112
+        attacker.velocityY = 0
+        attacker.grounded = false
+        local swingDistance = math.abs(defender.x - attacker.x)
+        if not special.hit and swingDistance <= 62 then
             special.hit = true
-            special.targetX = defender.x
-            defender:takeDamage(12 * attacker.power * mushroomPower
-                * attacker.comebackBoost, 0, attacker)
-            defender.x = math.max(fighterWidth / 2,
-                math.min(levelWidth - fighterWidth / 2,
-                    attacker.x + attacker.facing * 68))
-            defender.velocityY = math.min(defender.velocityY, 0)
+            defender:takeDamage(14 * attacker.power * mushroomPower
+                * attacker.comebackBoost, 34, attacker)
             defender.hitFlash = hitFlashDuration
             game.hitStopTimer = hitStopDuration * 0.7
         end
     elseif special.index == 2 then
-        attacker.x = math.max(fighterWidth / 2,
-            math.min(levelWidth - fighterWidth / 2,
-                attacker.x + attacker.facing * 720 * dt))
-        special.targetX = attacker.x + attacker.facing * 70
-        if not special.hit and distance <= 92 then
-            special.hit = true
-            defender:takeDamage(27 * attacker.power * mushroomPower
-                * attacker.comebackBoost, 64, attacker)
-            defender.hitFlash = hitFlashDuration
-            game.hitStopTimer = hitStopDuration
+        if not special.didTeleport and progress >= 0.16 then
+            special.didTeleport = true
+            local targetX
+            if distance <= 420 then
+                targetX = defender.x + attacker.facing * 54
+            else
+                targetX = special.startX + attacker.facing * 220
+            end
+            attacker.x = math.max(fighterWidth / 2,
+                math.min(levelWidth - fighterWidth / 2, targetX))
+            attacker.invulnerableTimer = math.max(attacker.invulnerableTimer, 0.42)
+            special.targetX = attacker.x
+            attacker.facing = defender.x >= attacker.x and 1 or -1
         end
     elseif special.index == 3 then
         special.targetX = attacker.x
-        if not special.hit and progress >= 0.22 then
-            special.hit = true
-            if distance <= 155 then
-                defender:takeDamage(22 * attacker.power * mushroomPower
-                    * attacker.comebackBoost, 88, attacker)
-                defender.hitFlash = hitFlashDuration
-                game.hitStopTimer = hitStopDuration
-            end
-        end
     end
 
     if special.timer <= 0 then
+        if special.index == 1 then
+            attacker.y = special.startY
+            attacker.grounded = special.startGrounded
+            attacker.platform = special.startPlatform
+            attacker.velocityY = 0
+        end
         attacker.special = nil
         attacker.recovery = 0.22
     end
@@ -1190,7 +1315,27 @@ local function updateCpu(dt)
         input.right = horizontalDistance > 0
     end
     input.block = cpu.blockTimer > 0
+    if fighter1.attack and fighter1.attack.phase == "active" then
+        local incomingLane = attacks[fighter1.attack.kind].lane
+        if incomingLane == "HIGH" then
+            input.crouch = true
+            input.block = false
+        elseif incomingLane == "MID" then
+            input.block = true
+        elseif incomingLane == "LOW" then
+            input.crouch = true
+            input.block = true
+        end
+    end
 
+    -- Anticipate ground hazards instead of repeatedly walking into pits.
+    if fighter2.grounded and cpu.jumpCooldown<=0 then
+        local dir=input.left and -1 or 1
+        local ahead=fighter2.x+dir*95
+        local hazard=isOverPit(ahead)
+        for _,v in ipairs(spikes)do if ahead>=v.x-24 and ahead<=v.x+v.width+24 then hazard=true end end
+        if hazard then fighter2:jump();cpu.jumpCooldown=.6 end
+    end
     if cpu.decisionTimer > 0 or fighter2.ko then
         return
     end
@@ -1206,6 +1351,9 @@ local function updateCpu(dt)
     if distance > 145 and distance <= 400 and fighter2.specialCooldowns[1] == 0
         and roll < 0.20 then
         fighter2:startSpecial(1)
+    elseif distance <= 360 and fighter2.specialCooldowns[4] == 0
+        and roll < 0.08 then
+        fighter2:startSpecial(4)
     elseif distance <= 120 and fighter2.specialCooldowns[3] == 0
         and roll < 0.16 then
         fighter2:startSpecial(3)
@@ -1221,7 +1369,9 @@ local function updateCpu(dt)
         cpu.jumpCooldown = 2.0 + love.math.random() * 2.0
     elseif distance <= 128 and roll < profile.blockChance + profile.jumpChance + profile.attackChance
         and cpu.attackCooldown == 0 and not fighter2.attack and not fighter2.blocking then
-        local kind = love.math.random() < 0.5 and "punch" or "kick"
+        local rollKind = love.math.random()
+        local kind = rollKind < 0.34 and "high"
+            or (rollKind < 0.68 and "mid" or "low")
         fighter2:startAttack(kind)
         cpu.attackCooldown = profile.attackCooldownMin
             + love.math.random() * (profile.attackCooldownMax - profile.attackCooldownMin)
@@ -1229,6 +1379,16 @@ local function updateCpu(dt)
 end
 
 function love.keypressed(key, scancode, isrepeat)
+    if not isrepeat then
+        if key=="f2" then cpuEnabled=not cpuEnabled; fighter2.aiInput=nil; FX.sound("menu"); return end
+        if FX.key(key) then return end
+        if key=="c" then FX.paused=false end
+        if game.state=="character_select" then FX.sound(key=="return" and "confirm" or "menu") end
+    end
+    if key == "f11" and not isrepeat then
+        love.window.setFullscreen(not love.window.getFullscreen(), "desktop")
+        return
+    end
     if game.state == "character_select" then
         if key == "escape" then
             love.event.quit()
@@ -1298,23 +1458,34 @@ function love.keypressed(key, scancode, isrepeat)
         if not (cpuEnabled and fighter == fighter2) then
             if key == fighter.controls.jump then
                 fighter:jump()
-            elseif key == fighter.controls.punch then
-                fighter:startAttack("punch")
-            elseif key == fighter.controls.kick then
-                fighter:startAttack("kick")
+            elseif key == fighter.controls.high then
+                fighter:startAttack("high")
+            elseif key == fighter.controls.mid then
+                fighter:startAttack("mid")
+            elseif key == fighter.controls.low then
+                fighter:startAttack("low")
             elseif key == fighter.controls.special1 then
                 fighter:startSpecial(1)
             elseif key == fighter.controls.special2 then
                 fighter:startSpecial(2)
             elseif key == fighter.controls.special3 then
                 fighter:startSpecial(3)
+            elseif key == fighter.controls.special4 then
+                fighter:startSpecial(4)
             end
         end
     end
 end
 
 function love.update(dt)
+    dt=math.min(dt,.04)
+    FX.update(dt,{game=game,fighters=fighters})
+    if FX.paused then return end
     menuPulse = menuPulse + dt
+    controllerQrCheckTimer = controllerQrCheckTimer - dt
+    screenShakeTimer = math.max(0, screenShakeTimer - dt)
+    screenFlashTimer = math.max(0, screenFlashTimer - dt)
+    superBannerTimer = math.max(0, superBannerTimer - dt)
     updatePhoneControls(dt)
     if game.state == "character_select" then
         return
@@ -1329,6 +1500,12 @@ function love.update(dt)
         end
         return
     elseif game.state ~= "fighting" then
+        if game.state == "match_over" or game.state == "game_won" then
+            game.transitionTimer = game.transitionTimer - dt
+            if game.transitionTimer <= 0 then
+                openCharacterSelect()
+            end
+        end
         fighter1.hitFlash = math.max(0, fighter1.hitFlash - dt)
         fighter2.hitFlash = math.max(0, fighter2.hitFlash - dt)
         return
@@ -1387,6 +1564,7 @@ function love.update(dt)
         local winner = fighter1.x >= flagX - 24 and 1 or 2
         game.state = "game_won"
         game.result = "PLAYER " .. winner .. " CAPTURED THE FLAG!"
+        game.transitionTimer = winnerScreenDuration
         fighter1.attack = nil
         fighter2.attack = nil
         fighter1.blocking = false
@@ -1405,6 +1583,7 @@ function love.update(dt)
     end
     if game.timeRemaining <= 0 then
         game.state = "match_over"
+        game.transitionTimer = winnerScreenDuration
         if fighter1.x > fighter2.x then
             game.result = "TIME — PLAYER 1 WINS THE RACE"
         elseif fighter2.x > fighter1.x then
@@ -1419,13 +1598,178 @@ function love.update(dt)
     end
 end
 
+local function drawEmberFighter(fighter, scale, bodyShift)
+    local crouchScale = fighter.crouching and 0.88 or 1
+    love.graphics.push()
+    love.graphics.translate(fighter.x + bodyShift,
+        fighter.y - (fighter.mount and riderOffset or 0))
+    love.graphics.scale(fighter.facing * scale, scale * crouchScale)
+
+    local pulse = 0.5 + 0.5 * math.sin(menuPulse * 11 + fighter.x * 0.025)
+    local red = { 0.78 + pulse * 0.10, 0.075, 0.055 }
+    local bright = { 1.00, 0.28 + pulse * 0.20, 0.035 }
+    local dark = { 0.105, 0.055, 0.075 }
+    local skin = { 0.91, 0.53, 0.36 }
+    local attackReach = fighter.attack
+        and (fighter.attack.phase == "active" and 1 or 0.45) or 0
+
+    -- Long dark trousers and wrapped shin guards.
+    love.graphics.setColor(0.035, 0.028, 0.045)
+    love.graphics.polygon("fill", -11, -38, 1, -38, -4, -19, -18, -4,
+        -29, -4, -22, -18)
+    love.graphics.polygon("fill", 0, -38, 12, -39, 19, -20, 29, -7,
+        18, -2, 7, -17)
+    love.graphics.setColor(0.38, 0.055, 0.045)
+    love.graphics.polygon("fill", -23, -19, -17, -15, -25, -6, -30, -6)
+    love.graphics.polygon("fill", 16, -18, 22, -20, 30, -8, 24, -5)
+    love.graphics.setColor(0.075, 0.045, 0.055)
+    love.graphics.polygon("fill", -29, -5, -17, -5, -14, -1, -34, -1)
+    love.graphics.polygon("fill", 20, -5, 32, -7, 37, -2, 20, -1)
+    love.graphics.setColor(bright)
+    love.graphics.line(-24, -17, -19, -12, -26, -7)
+    love.graphics.line(17, -17, 23, -13, 29, -8)
+    love.graphics.setColor(0.16, 0.035, 0.045)
+    love.graphics.line(-18, -34, -11, -27, -17, -19)
+    love.graphics.line(3, -35, 10, -27, 14, -20)
+    love.graphics.setColor(0.70, 0.10, 0.055)
+    love.graphics.line(-17, -31, -13, -27)
+    love.graphics.line(4, -32, 9, -27)
+    love.graphics.setColor(1, 0.72, 0.25)
+    love.graphics.line(-31, -3, -21, -3)
+    love.graphics.line(23, -4, 34, -4)
+
+    -- A loose flame sash trails behind the fighter and follows the idle motion.
+    local clothWave = math.sin(menuPulse * 5 + fighter.x * 0.03) * 4
+    love.graphics.setColor(0.43, 0.025, 0.035, 0.96)
+    love.graphics.polygon("fill", -8, -42, -18, -39, -37, -48 + clothWave,
+        -31, -35 + clothWave, -47, -25 + clothWave, -23, -29, -9, -34)
+    love.graphics.setColor(bright[1], bright[2], bright[3], 0.94)
+    love.graphics.polygon("fill", -18, -40, -34, -45 + clothWave,
+        -28, -35 + clothWave, -42, -27 + clothWave, -22, -31)
+
+    -- Fitted red-and-black top, edged with gold piping.
+    love.graphics.setColor(dark)
+    love.graphics.polygon("fill", -12, -69, 8, -69, 15, -59, 10, -38,
+        -10, -38, -16, -57)
+    love.graphics.setColor(red)
+    love.graphics.polygon("fill", -10, -66, 6, -66, 10, -57, 6, -43,
+        -8, -43, -13, -57)
+    love.graphics.setColor(1, 0.63, 0.18)
+    love.graphics.line(-10, -64, -4, -57, 3, -64, 8, -58)
+    love.graphics.line(-8, -43, 7, -43)
+    love.graphics.setColor(0.14, 0.055, 0.045)
+    love.graphics.rectangle("fill", -12, -40, 25, 5, 2, 2)
+    love.graphics.setColor(1, 0.68, 0.20)
+    love.graphics.rectangle("fill", -2, -40, 6, 5, 1, 1)
+    love.graphics.setColor(0.72, 0.045, 0.035)
+    love.graphics.polygon("fill", -10, -35, 8, -35, 26, -30,
+        13, -27, -3, -31, -18, -27)
+    love.graphics.setColor(1, 0.31, 0.035)
+    love.graphics.polygon("fill", -15, -31, -4, -28, -17, -23,
+        -30, -22, -20, -27)
+    love.graphics.setColor(1, 0.74, 0.23)
+    love.graphics.line(-9, -39, 1, -37, 10, -39)
+    love.graphics.circle("fill", 1, -37, 2)
+    love.graphics.setColor(0.97, 0.30, 0.12)
+    love.graphics.line(-11, -59, -5, -55, -10, -50)
+    love.graphics.line(8, -59, 3, -54, 8, -50)
+
+    -- Raised guard and forward striking arm, drawn as outlined segments.
+    love.graphics.setColor(0.075, 0.035, 0.045)
+    love.graphics.setLineWidth(12)
+    love.graphics.line(-9, -62, -20, -53, -17, -45)
+    love.graphics.line(9, -61, 18, -54, 24 + 19 * attackReach, -53)
+    love.graphics.setColor(skin)
+    love.graphics.setLineWidth(7)
+    love.graphics.line(-9, -62, -20, -53, -17, -45)
+    love.graphics.line(9, -61, 18, -54, 24 + 19 * attackReach, -53)
+    love.graphics.setLineWidth(1)
+    love.graphics.setColor(0.48, 0.045, 0.04)
+    love.graphics.circle("fill", -17, -44, 6)
+    love.graphics.circle("fill", 25 + 19 * attackReach, -53, 7)
+    love.graphics.setColor(1, 0.53, 0.16)
+    love.graphics.rectangle("fill", 13, -57, 8, 6, 2, 2)
+    love.graphics.rectangle("fill", -22, -48, 8, 6, 2, 2)
+    love.graphics.setColor(0.98, 0.67, 0.18)
+    love.graphics.line(14, -56, 20, -56)
+    love.graphics.line(-22, -47, -16, -47)
+    love.graphics.setColor(0.22, 0.045, 0.04)
+    love.graphics.circle("fill", 25 + 19 * attackReach, -53, 3)
+    love.graphics.circle("fill", -17, -44, 3)
+
+    -- Face, dark headband and the high, flame-shaped ponytail.
+    love.graphics.setColor(0.10, 0.025, 0.04)
+    love.graphics.polygon("fill", -8, -78, -18, -88, -32, -99,
+        -25, -88, -42, -94, -30, -83, -47, -86, -29, -76, -13, -70)
+    love.graphics.setColor(0.62, 0.035, 0.025)
+    love.graphics.polygon("fill", -17, -82, -31, -96, -26, -86,
+        -40, -91, -28, -82, -43, -82, -26, -76)
+    love.graphics.setColor(bright)
+    love.graphics.line(-25, -91, -31, -87, -39, -87)
+    love.graphics.line(-22, -84, -32, -80)
+    love.graphics.setColor(0.12, 0.035, 0.04)
+    love.graphics.polygon("fill", -10, -71, -17, -83, -12, -79,
+        -13, -91, -5, -83, 0, -94, 3, -82, 10, -88, 8, -77, 14, -70)
+    love.graphics.setColor(0.42, 0.025, 0.025)
+    love.graphics.polygon("fill", -12, -81, -20, -91, -9, -87,
+        -7, -98, 0, -87, 10, -93, 6, -81)
+    love.graphics.setColor(bright)
+    love.graphics.line(-18, -90, -10, -87, -7, -94)
+    love.graphics.line(-3, -85, 2, -91, 7, -87)
+    love.graphics.setColor(skin)
+    love.graphics.ellipse("fill", 1, -73, 10, 12)
+    love.graphics.setColor(0.12, 0.025, 0.035)
+    love.graphics.polygon("fill", -9, -77, -7, -84, 6, -83,
+        11, -77, 5, -80, -3, -79)
+    love.graphics.setColor(1, 0.83, 0.58)
+    love.graphics.line(1, -73, 5, -72)
+    love.graphics.setColor(0.20, 0.035, 0.045)
+    love.graphics.line(2, -76, 7, -76)
+    love.graphics.circle("fill", 5, -76, 1.2)
+    love.graphics.setColor(0.72, 0.26, 0.16)
+    love.graphics.line(10, -72, 12, -69)
+    love.graphics.setColor(0.20, 0.025, 0.035)
+    love.graphics.line(6, -68, 1, -66, -2, -67)
+    love.graphics.setColor(1, 0.67, 0.15)
+    love.graphics.rectangle("fill", -8, -81, 16, 3, 1, 1)
+    love.graphics.circle("fill", 8, -80, 2)
+
+    if fighter.fireTimer > 0 then
+        love.graphics.setColor(1, 0.25, 0.025, 0.75)
+        for i = 1, 3 do
+            local flameY = -26 - i * 17
+            local flameX = -8 - (i % 2) * 5
+            love.graphics.polygon("fill", flameX, flameY + 9,
+                flameX - 5, flameY, flameX - 3, flameY - 10 - pulse * 4,
+                flameX + 3, flameY - 2, flameX + 7, flameY + 8)
+        end
+    end
+    love.graphics.pop()
+end
+
 local function drawFighter(fighter)
+    if FX.fighter(fighter) then return end
     local scale = fighter.mushroomTimer > 0 and 1.35 or 1
     local bodyWidth = fighterWidth * scale
     local bodyHeight = (fighter.crouching and crouchingHeight or standingHeight) * scale
     local bodyBaseY = fighter.y - (fighter.mount and riderOffset or 0)
     local bodyTop = bodyBaseY - bodyHeight
     local bodyShift = 0
+    if fighter.timeStopTimer > 0 then
+        love.graphics.setColor(0.22, 0.78, 1, 0.22)
+        love.graphics.circle("fill", fighter.x, bodyTop + bodyHeight / 2, 56 * scale)
+        love.graphics.setColor(0.42, 0.88, 1, 0.88)
+        love.graphics.setLineWidth(3)
+        love.graphics.circle("line", fighter.x, bodyTop + bodyHeight / 2, 48 * scale)
+        love.graphics.setLineWidth(1)
+        for shard = 1, 6 do
+            local angle = shard * math.pi / 3 + menuPulse * 0.6
+            local sx = fighter.x + math.cos(angle) * 40 * scale
+            local sy = bodyTop + bodyHeight / 2 + math.sin(angle) * 40 * scale
+            love.graphics.polygon("fill", sx, sy - 9, sx + 6, sy,
+                sx, sy + 9, sx - 6, sy)
+        end
+    end
     if fighter.attack then
         bodyShift = fighter.facing * (fighter.attack.phase == "active" and 4 or -2)
     elseif fighter.special and fighter.special.index == 2 then
@@ -1460,20 +1804,39 @@ local function drawFighter(fighter)
     else
         love.graphics.setColor(fighter.color[1], fighter.color[2], fighter.color[3])
     end
-    love.graphics.rectangle("fill", fighter.x - bodyWidth / 2 + bodyShift, bodyTop,
-        bodyWidth, bodyHeight)
-    love.graphics.circle("fill", fighter.x + bodyShift,
-        bodyTop - 11 * scale, 12 * scale)
+    if fighter.character and fighter.character.name == "EMBER" then
+        drawEmberFighter(fighter, scale, bodyShift)
+    else
+        love.graphics.rectangle("fill", fighter.x - bodyWidth / 2 + bodyShift, bodyTop,
+            bodyWidth, bodyHeight)
+        love.graphics.circle("fill", fighter.x + bodyShift,
+            bodyTop - 11 * scale, 12 * scale)
+    end
 
     if fighter.attack then
-        local reach = fighter.attack.phase == "active" and 24 or 10
-        local limbX = fighter.facing > 0
-            and fighter.x + bodyWidth / 2 - 2
-            or fighter.x - bodyWidth / 2 - reach * scale + 2
-        love.graphics.rectangle("fill",
-            limbX,
-            bodyBaseY - (fighter.attack.kind == "kick" and 24 or 48),
-            reach * scale, 8 * scale)
+        local settings = attacks[fighter.attack.kind]
+        local active = fighter.attack.phase == "active"
+        local extension = active and 1 or 0.34
+        local fromX = fighter.x + bodyShift + fighter.facing * bodyWidth * 0.18
+        local fromY = bodyTop + bodyHeight
+            * (settings.lane == "LOW" and 0.76
+                or (settings.lane == "HIGH" and 0.20 or 0.48))
+        local toX = fighter.x + bodyShift + fighter.facing
+            * (bodyWidth * 0.5 + settings.range * 0.58 * extension) * scale
+        local toY = settings.lane == "HIGH" and bodyTop + bodyHeight * 0.17
+            or (settings.lane == "MID" and bodyTop + bodyHeight * 0.48
+                or bodyBaseY - 5 * scale)
+        local limbWidth = settings.limb == "leg" and 10 or 7
+        love.graphics.setColor(0.045, 0.045, 0.07, 0.92)
+        love.graphics.setLineWidth((limbWidth + 4) * scale)
+        love.graphics.line(fromX, fromY, toX, toY)
+        love.graphics.setColor(settings.lane == "HIGH" and 1 or 0.98,
+            settings.lane == "MID" and 0.92 or 0.68,
+            settings.lane == "LOW" and 0.20 or 0.34, 1)
+        love.graphics.setLineWidth(limbWidth * scale)
+        love.graphics.line(fromX, fromY, toX, toY)
+        love.graphics.circle("fill", toX, toY, (settings.limb == "leg" and 7 or 5) * scale)
+        love.graphics.setLineWidth(1)
     end
 
     if fighter.blocking then
@@ -1484,11 +1847,10 @@ local function drawFighter(fighter)
 
     if fighter.attack and fighter.attack.phase == "active" then
         local hitbox = fighter.attack.hitbox
-        if fighter.attack.kind == "punch" then
-            love.graphics.setColor(1, 0.86, 0.20, 0.45)
-        else
-            love.graphics.setColor(1, 0.42, 0.12, 0.45)
-        end
+        local settings = attacks[fighter.attack.kind]
+        love.graphics.setColor(settings.lane == "HIGH" and 1 or 0.30,
+            settings.lane == "MID" and 0.78 or 0.46,
+            settings.lane == "LOW" and 0.12 or 1, 0.32)
         love.graphics.rectangle("fill", hitbox.x, hitbox.y, hitbox.width, hitbox.height)
         love.graphics.setColor(1, 0.95, 0.75, 0.9)
         love.graphics.rectangle("line", hitbox.x, hitbox.y, hitbox.width, hitbox.height)
@@ -1497,50 +1859,62 @@ end
 
 local function drawSpecialEffect(fighter)
     local special = fighter.special
-    if not special then
-        return
-    end
-    local progress = 1 - special.timer / special.duration
     local accent = fighter.character and fighter.character.accent or fighter.color
+
+    if fighter.flightTimer > 0 then
+        local pulse = 0.22 + 0.08 * math.sin(menuPulse * 12)
+        love.graphics.setColor(0.34, 0.72, 1, pulse)
+        love.graphics.ellipse("line", fighter.x, fighter.y - 15, 48, 15)
+        love.graphics.setColor(accent[1], accent[2], accent[3], 0.48)
+        for wing = -1, 1, 2 do
+            love.graphics.arc("line", fighter.x, fighter.y - 48, 38,
+                wing < 0 and math.pi or 0,
+                wing < 0 and math.pi * 1.65 or math.pi * 0.65)
+        end
+    end
+    if not special then return end
+    local progress = 1 - special.timer / special.duration
 
     if special.index == 1 then
         local handX = fighter.x + fighter.facing * 18
         local handY = fighter.y - (fighter.mount and riderOffset or 0) - 48
-        local tipX = special.targetX
-        love.graphics.setLineWidth(4)
-        love.graphics.setColor(0.72, 0.74, 0.80)
-        love.graphics.line(handX, handY, tipX, handY + 4)
-        local links = math.max(1, math.floor(math.abs(tipX - handX) / 18))
-        for i = 1, links do
-            local x = handX + (tipX - handX) * i / links
-            love.graphics.setColor(i % 2 == 0 and { 0.95, 0.76, 0.30 }
-                or { 0.64, 0.66, 0.72 })
-            love.graphics.circle("line", x, handY + 4, 6)
+        local tipX, tipY = special.anchorX, math.max(70, special.startY - 290)
+        love.graphics.setLineWidth(3)
+        love.graphics.setColor(0.88, 0.96, 1, 0.95)
+        love.graphics.line(handX, handY, tipX, tipY)
+        love.graphics.setLineWidth(1)
+        for strand = -2, 2 do
+            local fraction = (strand + 3) / 6
+            local webX = tipX + (handX - tipX) * fraction
+            local webY = tipY + (handY - tipY) * fraction
+            love.graphics.line(tipX - 15, tipY + strand * 6,
+                webX, webY, tipX + 15, tipY + strand * 6)
         end
-        love.graphics.setColor(0.92, 0.24, 0.18)
-        love.graphics.polygon("fill", tipX, handY + 4,
-            tipX - fighter.facing * 18, handY - 8,
-            tipX - fighter.facing * 18, handY + 16)
+        love.graphics.circle("line", tipX, tipY, 11)
+        love.graphics.line(tipX - 13, tipY - 7, tipX + 13, tipY + 7)
+        love.graphics.line(tipX - 13, tipY + 7, tipX + 13, tipY - 7)
         love.graphics.setLineWidth(1)
     elseif special.index == 2 then
-        for i = 1, 4 do
-            love.graphics.setColor(accent[1], accent[2], accent[3], 0.32 / i)
-            love.graphics.rectangle("fill",
-                fighter.x - fighter.facing * i * 22 - 18,
-                fighter.y - 72, 36, 70, 8, 8)
+        for i = 1, 5 do
+            local ghostX = special.startX
+                + (fighter.x - special.startX) * (i / 5)
+            love.graphics.setColor(accent[1], accent[2], accent[3], 0.23 / i)
+            love.graphics.rectangle("fill", ghostX - 19, fighter.y - 75,
+                38, 70, 9, 9)
         end
-    else
+    elseif special.index == 4 then
         local radius = 35 + math.sin(math.min(1, progress) * math.pi) * 130
-        love.graphics.setColor(accent[1], accent[2], accent[3], 0.18)
+        love.graphics.setColor(0.28, 0.75, 1, 0.20)
         love.graphics.circle("fill", fighter.x, fighter.y - 42, radius)
-        love.graphics.setColor(accent[1], accent[2], accent[3], 0.86)
-        love.graphics.setLineWidth(5)
+        love.graphics.setColor(0.66, 0.92, 1, 0.9)
+        love.graphics.setLineWidth(4)
         love.graphics.circle("line", fighter.x, fighter.y - 42, radius)
         love.graphics.setLineWidth(1)
     end
 end
 
 local function drawAnimal(animal)
+    if FX.animal(animal) then return end
     local x = animal.x
     local y = animal.y + math.sin(animal.bob) * (animal.rider and 2.5 or 1)
     local facing = animal.facing or 1
@@ -1596,6 +1970,7 @@ local function drawAnimal(animal)
 end
 
 local function drawHealthBar(fighter, x, alignRight, label)
+    FX.health(fighter,x,alignRight,label,game.lives[fighter==fighter1 and 1 or 2]); do return end
     local barWidth = 180
     local barX = alignRight and x - barWidth or x
     love.graphics.setColor(0.10, 0.10, 0.13)
@@ -1605,7 +1980,7 @@ local function drawHealthBar(fighter, x, alignRight, label)
         barWidth * fighter.health / fighter.maxHealth, 16)
     love.graphics.setColor(0.92, 0.94, 1)
     local playerNumber = fighter == fighter1 and 1 or 2
-    local livesText = string.rep("♥", game.lives[playerNumber])
+    local livesText = string.rep("*", game.lives[playerNumber])
     if alignRight then
         love.graphics.printf(label .. " HP " .. fighter.health,
             barX - 132, 63, 124, "right")
@@ -1635,10 +2010,11 @@ local function drawHealthBar(fighter, x, alignRight, label)
 end
 
 local function drawSpecialHud(fighter, x, alignRight, keys)
-    local totalWidth = 204
+    FX.specialHud(fighter,x,alignRight,keys); do return end
+    local totalWidth = 274
     local startX = alignRight and x - totalWidth or x
     for i, move in ipairs(specialMoves) do
-        local boxX = startX + (i - 1) * 70
+        local boxX = startX + (i - 1) * 68
         local ready = fighter.specialCooldowns[i] <= 0
         love.graphics.setColor(ready and { 0.16, 0.28, 0.24, 0.94 }
             or { 0.11, 0.12, 0.17, 0.90 })
@@ -1664,11 +2040,59 @@ local function drawStat(label, value, maximum, x, y, width, color)
 end
 
 local function drawCharacterPortrait(character, x, y, scale, selected)
+    if FX.portrait(character,x,y,scale,selected) then return end
     if selected then
         local glow = 0.16 + 0.08 * math.sin(menuPulse * 4)
         love.graphics.setColor(character.accent[1], character.accent[2],
             character.accent[3], glow)
         love.graphics.circle("fill", x, y, 70 * scale)
+    end
+
+    if character.name == "EMBER" then
+        love.graphics.setColor(0.12, 0.025, 0.04)
+        love.graphics.polygon("fill", x - 8 * scale, y - 12 * scale,
+            x - 24 * scale, y - 39 * scale, x - 13 * scale, y - 33 * scale,
+            x - 7 * scale, y - 53 * scale, x + 1 * scale, y - 34 * scale,
+            x + 18 * scale, y - 45 * scale, x + 10 * scale, y - 25 * scale)
+        love.graphics.setColor(0.90, 0.14, 0.025)
+        love.graphics.polygon("fill", x - 14 * scale, y - 34 * scale,
+            x - 22 * scale, y - 48 * scale, x - 9 * scale, y - 42 * scale,
+            x - 3 * scale, y - 58 * scale, x + 2 * scale, y - 39 * scale)
+        love.graphics.setColor(0.08, 0.04, 0.06)
+        love.graphics.polygon("fill", x - 38 * scale, y + 60 * scale,
+            x - 28 * scale, y + 5 * scale, x - 15 * scale, y - 6 * scale,
+            x + 16 * scale, y - 6 * scale, x + 30 * scale, y + 8 * scale,
+            x + 40 * scale, y + 60 * scale)
+        love.graphics.setColor(0.78, 0.055, 0.035)
+        love.graphics.polygon("fill", x - 25 * scale, y + 17 * scale,
+            x - 21 * scale, y - 8 * scale, x - 12 * scale, y - 17 * scale,
+            x + 12 * scale, y - 17 * scale, x + 23 * scale, y - 5 * scale,
+            x + 28 * scale, y + 18 * scale, x + 10 * scale, y + 11 * scale,
+            x - 9 * scale, y + 11 * scale)
+        love.graphics.setColor(0.93, 0.54, 0.37)
+        love.graphics.ellipse("fill", x + 2 * scale, y - 25 * scale,
+            17 * scale, 22 * scale)
+        love.graphics.setColor(0.10, 0.025, 0.035)
+        love.graphics.polygon("fill", x - 15 * scale, y - 28 * scale,
+            x - 12 * scale, y - 46 * scale, x + 7 * scale, y - 48 * scale,
+            x + 20 * scale, y - 32 * scale, x + 10 * scale, y - 37 * scale,
+            x - 2 * scale, y - 35 * scale)
+        love.graphics.setColor(1, 0.74, 0.22)
+        love.graphics.rectangle("fill", x - 13 * scale, y - 39 * scale,
+            28 * scale, 4 * scale, 2 * scale, 2 * scale)
+        love.graphics.circle("fill", x + 15 * scale, y - 37 * scale, 3 * scale)
+        love.graphics.setColor(0.20, 0.025, 0.035)
+        love.graphics.line(x + 7 * scale, y - 26 * scale,
+            x + 14 * scale, y - 25 * scale)
+        love.graphics.setColor(1, 0.48, 0.12)
+        love.graphics.polygon("fill", x - 28 * scale, y + 17 * scale,
+            x - 8 * scale, y + 12 * scale, x + 12 * scale, y + 17 * scale,
+            x + 26 * scale, y + 30 * scale, x + 7 * scale, y + 25 * scale,
+            x - 11 * scale, y + 30 * scale, x - 31 * scale, y + 24 * scale)
+        love.graphics.setColor(1, 0.70, 0.20)
+        love.graphics.rectangle("fill", x - 4 * scale, y + 14 * scale,
+            8 * scale, 8 * scale, 2 * scale, 2 * scale)
+        return
     end
 
     love.graphics.setColor(0.06, 0.07, 0.12)
@@ -1705,6 +2129,9 @@ local function drawCharacterSelect()
             0.12 + blend * 0.08, 1)
         love.graphics.rectangle("fill", 0, y, arenaWidth, 18)
     end
+    FX.backgroundDraw(0)
+    love.graphics.setColor(.015,.025,.05,.72)
+    love.graphics.rectangle("fill",0,0,960,540)
     for i = 1, 22 do
         local x = (i * 137) % arenaWidth
         local y = 82 + (i * 71) % 360
@@ -1722,14 +2149,17 @@ local function drawCharacterSelect()
     love.graphics.setColor(0.48, 0.78, 1)
     love.graphics.printf("SHADOW FIGHTERS  //  RIDE. STRIKE. SURVIVE.",
         0, 75, arenaWidth, "center")
+    love.graphics.setColor(0.58, 0.64, 0.78)
+    love.graphics.printf("F11 FULLSCREEN   /   F2 CPU OR PVP   /   ESC PAUSE", 0, 91, arenaWidth, "center")
 
     local cardWidth = 202
     local cardGap = 18
     local startX = 49
     for i, character in ipairs(characters) do
         local x = startX + (i - 1) * (cardWidth + cardGap)
-        local selected = selectedCharacter[1] == i
-            or (not cpuEnabled and selectedCharacter[2] == i)
+        local p1Selected = selectedCharacter[1] == i
+        local p2Selected = not cpuEnabled and selectedCharacter[2] == i
+        local selected = p1Selected or p2Selected
         local y = selected and 108 or 116
         local cardHeight = selected and 334 or 318
 
@@ -1737,6 +2167,23 @@ local function drawCharacterSelect()
         love.graphics.rectangle("fill", x + 5, y + 7, cardWidth, cardHeight, 12, 12)
         love.graphics.setColor(0.075, 0.085, 0.15, 0.96)
         love.graphics.rectangle("fill", x, y, cardWidth, cardHeight, 12, 12)
+        if p1Selected or p2Selected then
+            love.graphics.setFont(uiFont)
+            if p1Selected then
+                love.graphics.setColor(0.16, 0.46, 0.78, 0.92)
+                love.graphics.rectangle("fill", x + 12, y + 13, 48, 20, 6, 6)
+                love.graphics.setColor(1, 1, 1)
+                love.graphics.printf("P1", x + 12, y + 17, 48, "center")
+            end
+            if p2Selected then
+                love.graphics.setColor(0.68, 0.28, 0.18, 0.94)
+                love.graphics.rectangle("fill", x + (p1Selected and 66 or 12),
+                    y + 13, 48, 20, 6, 6)
+                love.graphics.setColor(1, 1, 1)
+                love.graphics.printf("P2", x + (p1Selected and 66 or 12),
+                    y + 17, 48, "center")
+            end
+        end
         love.graphics.setColor(character.color[1], character.color[2],
             character.color[3], selected and 0.95 or 0.42)
         love.graphics.rectangle("line", x, y, cardWidth, cardHeight, 12, 12)
@@ -1769,33 +2216,47 @@ local function drawCharacterSelect()
 
     local current = characters[selectedCharacter[1]]
     love.graphics.setColor(0.04, 0.05, 0.09, 0.92)
-    love.graphics.rectangle("fill", 0, 464, arenaWidth, 76)
+    love.graphics.rectangle("fill", 0, 448, arenaWidth, 92)
     love.graphics.setColor(current.color)
-    love.graphics.rectangle("fill", 0, 464, arenaWidth, 2)
+    love.graphics.rectangle("fill", 0, 448, arenaWidth, 2)
     love.graphics.setFont(characterFont)
     love.graphics.setColor(current.accent)
-    love.graphics.print("P1  " .. current.name, 42, 478)
+    love.graphics.print("P1  " .. current.name, 28, 458)
     love.graphics.setFont(uiFont)
-    love.graphics.setColor(0.82, 0.86, 0.94)
-    love.graphics.print("A / D  SELECT", 285, 482)
-    love.graphics.print("J / ENTER  CONFIRM", 410, 482)
-    love.graphics.setColor(0.48, 0.54, 0.66)
-    love.graphics.print(cpuEnabled and "OPPONENT: CPU RANDOM"
-        or "P2: ARROWS + N TO CONFIRM", 650, 482)
     love.graphics.setColor(phoneConnected[1] and { 0.38, 1.00, 0.62 }
         or { 0.48, 0.52, 0.62 })
     love.graphics.print("P1 PHONE: " .. (phoneConnected[1] and "CONNECTED" or "WAITING"),
-        42, 503)
+        28, 511)
+    love.graphics.setColor(0.82, 0.86, 0.94)
+    love.graphics.print("A / D  SELECT", 228, 470)
+    love.graphics.print("J / ENTER  CONFIRM", 228, 490)
+    if controllerQrCheckTimer <= 0 then
+        refreshControllerQr(controllerQrImage == nil)
+    end
+    if controllerQrImage then
+        love.graphics.setColor(1, 1, 1)
+        love.graphics.draw(controllerQrImage, 390, 454, 0, 0.50, 0.50)
+        love.graphics.setFont(uiFont)
+        love.graphics.setColor(0.74, 0.82, 1)
+        love.graphics.print("PHONE CONTROLLER", 472, 459)
+        love.graphics.setColor(0.90, 0.94, 1)
+        love.graphics.print("SCAN TO JOIN", 472, 478)
+        love.graphics.setColor(0.62, 0.70, 0.85)
+        love.graphics.printf(controllerQrUrl, 472, 499, 210, "left")
+    end
     love.graphics.setColor(phoneConnected[2] and { 0.38, 1.00, 0.62 }
         or { 0.48, 0.52, 0.62 })
     love.graphics.printf("P2 PHONE: " .. (phoneConnected[2] and "CONNECTED" or "WAITING")
-        .. (selectionReady[2] and "  •  READY" or ""), 650, 503, 268, "right")
+        .. (selectionReady[2] and "  /  READY" or ""), 700, 460, 230, "right")
+    love.graphics.setColor(0.48, 0.54, 0.66)
+    love.graphics.printf(cpuEnabled and "OPPONENT: CPU RANDOM"
+        or "P2: ARROWS + N TO CONFIRM", 700, 483, 230, "right")
     love.graphics.setColor(0.55, 0.60, 0.72)
-    love.graphics.printf("C returns here during a match  •  ESC quits",
-        0, 523, arenaWidth, "center")
+    love.graphics.printf("C MENU  /  ESC QUIT", 700, 508, 230, "right")
 end
 
 local function drawScrollingBackground()
+    if FX.backgroundDraw(cameraX) then return end
     love.graphics.clear(0.08, 0.13, 0.26)
     for y = 0, floorY, 20 do
         local t = y / floorY
@@ -1838,13 +2299,13 @@ local function drawFlag()
 end
 
 local function drawWorldScenery()
-    love.graphics.setColor(0.20, 0.19, 0.25)
+    love.graphics.setColor(0.10, 0.15, 0.20)
     love.graphics.rectangle("fill", 0, floorY, levelWidth, 80)
-    love.graphics.setColor(0.45, 0.34, 0.22)
+    love.graphics.setColor(0.29, 0.43, 0.44)
     love.graphics.rectangle("fill", 0, floorY, levelWidth, 8)
     for x = 0, levelWidth, 64 do
-        love.graphics.setColor((x / 64) % 2 == 0 and { 0.25, 0.23, 0.30 }
-            or { 0.30, 0.27, 0.34 })
+        love.graphics.setColor((x / 64) % 2 == 0 and { 0.12, 0.19, 0.24 }
+            or { 0.14, 0.21, 0.27 })
         love.graphics.rectangle("fill", x, floorY + 8, 64, 34)
     end
 
@@ -1899,7 +2360,7 @@ local function drawWorldScenery()
             }
             local labels = {
                 MUSHROOM = "M", SHIELD = "S", FIRE = "F",
-                BOOTS = "B", BOND = "♥", LIGHTNING = "⚡",
+                BOOTS = "B", BOND = "*", LIGHTNING = "L",
             }
             love.graphics.setColor(colors[mushroom.kind] or colors.MUSHROOM)
             love.graphics.circle("fill", mushroom.x, mushroom.y, 19)
@@ -1920,15 +2381,6 @@ local function drawWorldScenery()
         end
     end
 
-    for i = 1, 9 do
-        local x = 380 + i * 330
-        love.graphics.setColor(0.18, 0.12, 0.10)
-        love.graphics.rectangle("fill", x - 8, floorY - 72, 16, 72)
-        love.graphics.setColor(0.12, 0.42, 0.26)
-        love.graphics.circle("fill", x, floorY - 88, 38)
-        love.graphics.circle("fill", x - 25, floorY - 72, 28)
-        love.graphics.circle("fill", x + 25, floorY - 72, 28)
-    end
     drawFlag()
 end
 
@@ -1940,13 +2392,29 @@ local function powerStatus(fighter)
     if fighter.bootsTimer > 0 then table.insert(status, "SPEED") end
     if fighter.bondCharmTimer > 0 then table.insert(status, "BOND") end
     if fighter.comebackBoost > 1 then table.insert(status, "COMEBACK") end
-    return table.concat(status, "  •  ")
+    return table.concat(status, "  /  ")
 end
 
 function love.draw()
+    local screenWidth, screenHeight = love.graphics.getDimensions()
+    local screenScale = math.min(screenWidth / arenaWidth, screenHeight / 540)
+    local offsetX = (screenWidth - arenaWidth * screenScale) / 2
+    local offsetY = (screenHeight - 540 * screenScale) / 2
+    love.graphics.clear(0.015, 0.02, 0.045)
+    love.graphics.push()
+    love.graphics.translate(offsetX, offsetY)
+    love.graphics.scale(screenScale, screenScale)
     if game.state == "character_select" then
         drawCharacterSelect()
+        love.graphics.pop()
+        FX.overlay()
         return
+    end
+    love.graphics.push()
+    if screenShakeTimer > 0 then
+        local shake = screenShakeStrength * screenShakeTimer / 0.38
+        love.graphics.translate((love.math.random() * 2 - 1) * shake,
+            (love.math.random() * 2 - 1) * shake)
     end
     love.graphics.setFont(uiFont)
     drawScrollingBackground()
@@ -1962,11 +2430,12 @@ function love.draw()
     drawFighter(fighter2)
     drawSpecialEffect(fighter1)
     drawSpecialEffect(fighter2)
+    FX.world({fighters=fighters})
     love.graphics.pop()
     drawHealthBar(fighter1, 12, false, "F1")
     drawHealthBar(fighter2, arenaWidth - 12, true, "F2")
-    drawSpecialHud(fighter1, 12, false, { "U", "I", "O" })
-    drawSpecialHud(fighter2, arenaWidth - 12, true, { "1", "2", "3" })
+    drawSpecialHud(fighter1, 12, false, { "U", "I", "O", "P" })
+    drawSpecialHud(fighter2, arenaWidth - 12, true, { "1", "2", "3", "4" })
 
     love.graphics.setColor(0.92, 0.94, 1)
     love.graphics.setFont(timerFont)
@@ -1997,17 +2466,19 @@ function love.draw()
                 0, 245, arenaWidth, "center")
         elseif game.state == "match_over" then
             love.graphics.setColor(0.92, 0.94, 1)
-            love.graphics.printf("PRESS R TO RESTART", 0, 245, arenaWidth, "center")
+            love.graphics.printf("RETURNING TO FIGHTER SELECT IN "
+                .. math.max(0, math.ceil(game.transitionTimer)),
+                0, 245, arenaWidth, "center")
         else
             love.graphics.setColor(0.92, 0.94, 1)
-            love.graphics.printf("THE SHADOW ROAD IS CONQUERED!  •  R RESTART  •  C CHARACTERS",
+            love.graphics.printf("THE SHADOW ROAD IS CONQUERED!  /  R RESTART  /  C CHARACTERS",
                 0, 245, arenaWidth, "center")
         end
     end
 
     love.graphics.setFont(uiFont)
     love.graphics.setColor(0.92, 0.94, 1)
-    love.graphics.print("FPS: " .. love.timer.getFPS(), 12, 12)
+    love.graphics.print("", 12, 12)
     local progressWidth = 230
     local progress = math.min(1, fighter1.x / flagX)
     local progress2 = math.min(1, fighter2.x / flagX)
@@ -2021,11 +2492,10 @@ function love.draw()
     love.graphics.rectangle("fill", arenaWidth / 2 - progressWidth / 2,
         59, progressWidth * progress2, 3, 2, 2)
     love.graphics.setColor(0.94, 0.96, 1)
-    love.graphics.printf("P1 " .. math.floor(progress * 100) .. "%  •  P2 "
+    love.graphics.printf("P1 " .. math.floor(progress * 100) .. "%  /  P2 "
         .. math.floor(progress2 * 100) .. "%",
         arenaWidth / 2 - 70, 65, 140, "center")
-    love.graphics.printf("F1: E TO MOUNT / DISMOUNT"
-        .. (cpuEnabled and "" or "     F2: / TO MOUNT / DISMOUNT"),
+    love.graphics.printf("A D MOVE / W JUMP / S CROUCH / J K H ATTACK / L GUARD / E RIDE / U I O P SUPER",
         0, 516, arenaWidth, "center")
     if fighter1.mount then
         love.graphics.setColor(fighter1.mount.bonded and { 1, 0.86, 0.28 }
@@ -2055,4 +2525,57 @@ function love.draw()
     love.graphics.print(powerStatus(fighter1), 12, 216)
     love.graphics.setColor(0.46, 0.82, 1)
     love.graphics.printf(powerStatus(fighter2), arenaWidth - 312, 216, 300, "right")
+    love.graphics.pop()
+
+    if screenFlashTimer > 0 then
+        love.graphics.setColor(0.82, 0.94, 1, 0.28 * screenFlashTimer / 0.24)
+        love.graphics.rectangle("fill", 0, 0, arenaWidth, 540)
+    end
+    if superBannerTimer > 0 then
+        love.graphics.setFont(characterFont)
+        love.graphics.setColor(0.72, 0.92, 1, math.min(1, superBannerTimer * 1.5))
+        love.graphics.printf(superBannerText, 0, 174, arenaWidth, "center")
+    end
+    love.graphics.pop()
+    FX.overlay()
+end
+
+-- Integration checks execute real combat, stage and audio code under LÖVE.
+function love.load(args)
+ if not args or args[1]~='--selftest' then return end
+ local function check(v,msg)assert(v,msg);print('PASS '..msg)end
+ applyCharacter(fighter1,1);applyCharacter(fighter2,3);resetRound()
+ check(FX.background~=nil,'illustrated background loaded')
+ for _,n in ipairs({'ember','tempest','warden','viper'})do check(FX.art[n] and FX.sheets[n] and FX.walks[n],n..' portrait and ten action poses loaded')end
+ check(FX.animals.HORSE and FX.animals.BOAR,'illustrated mounts loaded')
+ check(FX.music.arena_theme and FX.music.menu_theme,'both streaming music tracks loaded')
+ local count=0;for _ in pairs(FX.sources)do count=count+1 end;check(count==17,'17 sound effect sources loaded')
+ local f=fighter1;local d=fighter2
+ f.health=f.maxHealth;d.blocking=false;d:takeDamage(25,10,f);check(d.health==d.maxHealth-25,'unblocked damage preserved')
+ d.health=d.maxHealth;d.blocking=true;d:takeDamage(25,10,f);check(d.health==d.maxHealth-5,'guard reduces incoming damage')
+ d.health=d.maxHealth;d:takeDamage(25,10,f,true);check(d.health==d.maxHealth-25,'low attack bypasses standing block')
+ resetRound();f=fighter1;f.x=530;f.y=460;f.grounded=true
+ FX.update(.016,{game=game,fighters=fighters});check(f.velocityY==-850 and not f.grounded,'spring launches fighter')
+ resetRound();f=fighter1;f.x=1430;f.y=350;f.grounded=false;f.velocityY=100
+ FX.update(.016,{game=game,fighters=fighters});check(f.velocityY<100,'wind lifts airborne fighter')
+ resetRound();f=fighter1;f.x=850;f.y=460;f.health=40;f.facing=1;f.specialCooldowns={7,8,9,10}
+ for i=1,3 do f.attack={phase='active',kind='high'};FX.update(.41,{game=game,fighters=fighters})end
+ check(FX.gimmicks[2].hp==0 and f.health==58 and f.specialCooldowns[1]==3,'crystal breaks once and restores health/cooldowns')
+ FX.update(.41,{game=game,fighters=fighters});check(f.health==58,'destroyed crystal cannot be farmed')
+ resetRound();f=fighter1;f.x=3080;f.grounded=true;FX.update(.016,{game=game,fighters=fighters});check(f.shieldHealth==30,'altar grants shield')
+ local cd=FX.gimmicks[7].cool;f.shieldHealth=0;FX.update(.1,{game=game,fighters=fighters});check(f.shieldHealth==0 and FX.gimmicks[7].cool<cd,'altar cooldown prevents repeated reward')
+ resetRound();check(FX.gimmicks[2].hp==3 and FX.gimmicks[7].cool==0,'restart resets stage gimmicks')
+ for i=1,4 do resetRound();check(fighter1:startSpecial(i),'super '..i..' starts');check(fighter1.specialCooldowns[i]>0,'super '..i..' cooldown');end
+ FX.key('escape');local old=fighter1.x;love.update(.016);check(fighter1.x==old,'pause freezes gameplay');FX.key('escape')
+ updatePhoneControls(.1);check(cpuEnabled,'CPU stays on with no second phone')
+ local canvas=love.graphics.newCanvas(960,540);love.graphics.setCanvas(canvas)
+ for i=1,4 do applyCharacter(fighter1,i);for _,pose in ipairs({'idle','high','low','crouch','jump','hit','walk','ride','block'})do
+  fighter1:reset();fighter1.x=300
+  if pose=='high'or pose=='low'then fighter1.attack={phase='active',kind=pose}
+  elseif pose=='crouch'then fighter1.crouching=true elseif pose=='jump'then fighter1.grounded=false
+  elseif pose=='hit'then fighter1.hitFlash=.1 elseif pose=='walk'then fighter1._oldDrawX=290
+  elseif pose=='ride'then fighter1.mount={bonded=false} elseif pose=='block'then fighter1.blocking=true end
+  check(FX.fighter(fighter1),'render '..characters[i].name..' '..pose)
+ end end
+ love.graphics.setCanvas();print('ALL INTEGRATION CHECKS PASSED');love.event.quit(0)
 end
